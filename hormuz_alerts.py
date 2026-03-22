@@ -178,6 +178,51 @@ def fetch_hormuztracker():
         result["conflict_day_calc"] = int((time.time() - conflict_start) / 86400)
     return result
 
+def push_prices_to_jsonbin():
+    """Push latest prices to JSONBin so dashboard can read them."""
+    if not JSONBIN_ID or not JSONBIN_KEY:
+        return
+    try:
+        payload = {
+            "ts": int(time.time()),
+            "brent":  round(data.get("brent",  0), 2),
+            "wti":    round(data.get("wti",    0), 2),
+            "gold":   round(data.get("gold",   0), 2),
+            "spx":    round(data.get("spx",    0), 2),
+            "tsy":    round(data.get("tsy",    0), 3),
+            "btc":    round(data.get("btc",    0), 0),
+            "dxy":    round(data.get("dxy",    0), 2),
+            "kospi":  round(data.get("kospi",  0), 0),
+            "nikkei": round(data.get("nikkei", 0), 0),
+            "bdi":    round(data.get("bdi",    0), 0),
+            "ttf":    round(data.get("ttf",    0), 2),
+            "vlcc":   round(data.get("vlcc",   285000), 0),
+            "hormuz": data.get("hormuz", 5),
+            "carriersOut":   data.get("carriers_out",  9),
+            "carriersTotal": data.get("carriers_total", 9),
+            "piWithdrawn":   data.get("pi_withdrawn", True),
+            "ceasefire":     data.get("ceasefire", "none"),
+            "conflictDay":   data.get("conflict_day") or data.get("conflict_day_calc", 22),
+            "ieaMb":         data.get("ieaMb", 400),
+        }
+        r = requests.put(
+            f"https://api.jsonbin.io/v3/b/{JSONBIN_ID}",
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-Master-Key": JSONBIN_KEY,
+                "X-Bin-Versioning": "false"
+            },
+            timeout=10
+        )
+        if r.status_code == 200:
+            print(f"[{now()}] ✓ Prices pushed to JSONBin")
+        else:
+            print(f"[{now()}] JSONBin error: {r.status_code} {r.text[:100]}")
+    except Exception as e:
+        print(f"[{now()}] JSONBin push error: {e}")
+
+
 def calc_phase():
     b = data.get("brent", 92)
     h = data.get("hormuz", 0)
@@ -428,6 +473,7 @@ def main():
     refresh_data()
     state["start_time"] = time.time()
     state["last_fetch_time"] = now()
+    push_prices_to_jsonbin()  # push on startup
     # Set baseline state so we don't fire spurious alerts on startup
     state["phase"] = calc_phase()
     state["ceasefire"] = data.get("ceasefire", "none")
@@ -444,7 +490,7 @@ def main():
     )
 
     # Schedule
-    schedule.every(15).minutes.do(lambda: (refresh_data(), check_alerts(), state.update({"last_fetch_time": now()})))
+    schedule.every(15).minutes.do(lambda: (refresh_data(), push_prices_to_jsonbin(), check_alerts(), state.update({"last_fetch_time": now()})))
     schedule.every().day.at("08:00").do(send_summary)
 
     print(f"[{now()}] Bot running. Ctrl+C to stop.")
