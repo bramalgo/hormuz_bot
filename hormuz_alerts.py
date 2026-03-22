@@ -160,6 +160,7 @@ def refresh_data():
 
     print(f"[{now()}] Brent=${data.get('brent','?'):.1f} Hormuz={data.get('hormuz','?')}/day "
           f"Phase={calc_phase()} Ceasefire={data.get('ceasefire','?')}")
+    state["last_fetch_time"] = now()
 
 def check_alerts():
     """Check for trigger conditions and send alerts."""
@@ -291,6 +292,24 @@ def handle_commands():
                     f"P&I: {'Cancelled' if data.get('pi_withdrawn') else 'Active'}\n"
                     f"Ceasefire: {cf_label}"
                 )
+            elif cmd == "/status":
+                ph = calc_phase()
+                p = PHASES[ph]
+                uptime = time.time() - state.get("start_time", time.time())
+                hours = int(uptime // 3600)
+                mins  = int((uptime % 3600) // 60)
+                last  = state.get("last_fetch_time", "never")
+                cf_label = {"none":"None","talks":"Talks","announced":"Announced","holding":"Holding"}.get(data.get("ceasefire","none"),"?")
+                send(
+                    f"✅ <b>Bot is running</b>\n"
+                    f"Uptime: {hours}h {mins}m\n"
+                    f"Last fetch: {last}\n\n"
+                    f"📊 <b>{p['lbl']} — {p['name']}</b>\n"
+                    f"Brent: ${data.get('brent',0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
+                    f"Ceasefire: {cf_label}\n"
+                    f"P&I: {'Cancelled' if data.get('pi_withdrawn') else 'Active'}\n\n"
+                    f"🔔 Alerts: every 15 min | Commands: every 10s"
+                )
             elif cmd == "/help":
                 send(
                     "🤖 <b>Hormuz Alert Bot</b>\n\n"
@@ -298,6 +317,7 @@ def handle_commands():
                     "/phase — Current phase + action\n"
                     "/brent — Oil prices\n"
                     "/strait — Hormuz shipping\n"
+                    "/status — Bot health + uptime\n"
                     "/help — This message"
                 )
     except Exception as e:
@@ -318,6 +338,8 @@ def main():
 
     # Initial fetch
     refresh_data()
+    state["start_time"] = time.time()
+    state["last_fetch_time"] = now()
     # Set baseline state so we don't fire spurious alerts on startup
     state["phase"] = calc_phase()
     state["ceasefire"] = data.get("ceasefire", "none")
@@ -334,7 +356,7 @@ def main():
     )
 
     # Schedule
-    schedule.every(15).minutes.do(lambda: (refresh_data(), check_alerts()))
+    schedule.every(15).minutes.do(lambda: (refresh_data(), check_alerts(), state.update({"last_fetch_time": now()})))
     schedule.every().day.at("08:00").do(send_summary)
 
     print(f"[{now()}] Bot running. Ctrl+C to stop.")
