@@ -5,7 +5,7 @@ Runs 24/7, sends alerts and responds to commands.
 Usage: python3 hormuz_alerts.py
 """
 
-import os, json, time, requests, schedule, threading
+import os, json, time, requests, schedule, threading, random, string
 import websocket
 from flask import Flask, request as freq, jsonify
 from datetime import datetime
@@ -498,6 +498,10 @@ def handle_commands():
         print(f"[{now()}] Command poll error: {e}")
 
 # ── TRADINGVIEW WEBSOCKET FEED ──
+tv_session = "qs_" + "".join(random.choices(string.ascii_lowercase, k=12))
+tv_ws = None
+
+
 TV_SYMBOLS = {
     "UKOIL":   "brent",
     "USOIL":   "wti",
