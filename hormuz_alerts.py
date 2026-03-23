@@ -150,17 +150,20 @@ def fetch_hormuztracker():
         html = r.text
         import re
 
-        # ── Vessels — try many patterns ──
-        vm = (re.search(r'(\d+)\s*vessels?\s*(?:detected\s*)?today', html, re.I)
+        # ── Vessels — try tilde format first (~5) as shown on site ──
+        vm = (re.search(r'~\s*(\d+)\s*(?:ships?|vessels?)', html, re.I)
+           or re.search(r'~\s*(\d+)\s*\n', html)
+           or re.search(r'(\d+)\s*vessels?\s*(?:detected\s*)?today', html, re.I)
            or re.search(r'today[^\d]{0,20}(\d+)\s*vessels?', html, re.I)
-           or re.search(r'~\s*(\d+)\s*(?:ships?|vessels?)', html, re.I)
-           or re.search(r'(\d+)\s*ships?\s*(?:detected|transiting|passed)', html, re.I)
-           or re.search(r'vessel[^<]{0,30}?(\d+)', html, re.I))
+           or re.search(r'(\d+)\s*ships?\s*(?:detected|transiting|passed)', html, re.I))
         if vm:
             c = int(vm.group(1))
+            # Print context to help debug
+            start = max(0, vm.start()-30)
+            end = min(len(html), vm.end()+30)
+            print(f"[{now()}] Vessel match: '{html[start:end].strip()}' → {c}")
             if 0 < c < 500:
                 result["hormuz"] = c
-                print(f"[{now()}] Hormuz vessels: {c}")
             else:
                 print(f"[{now()}] Hormuz vessels out of range: {c}")
         else:
