@@ -52,9 +52,9 @@ state = {
 
 data = {
     # Seeded defaults — updated on each fetch
-    "brent": 112.19, "wti": 98.32, "gold": 4574.90,
+    "brent": 111.89, "wti": 99.80, "gold": 4428.0,
     "spx": 6506, "tsy": 4.39, "btc": 68900,
-    "dxy": 99.5, "kospi": 5452, "nikkei": 35800, "bdi": 890,
+    "dxy": 99.5, "kospi": 5452, "nikkei": 35800, "bdi": 2056,
     "ttf": 60.20, "vlcc": 285000,
     "hormuz": 5, "carriers_out": 9, "carriers_total": 9,
     "pi_withdrawn": True, "ceasefire": "none",
@@ -320,6 +320,36 @@ def refresh_data():
                     print(f"[{now()}] {key}: {v:.0f}")
             else:
                 print(f"[{now()}] {key} value {v} out of bounds ({lo}-{hi}), skipping")
+
+    # Brent — try multiple contracts, use highest (spot > front month)
+    brent_alts = ["BZK26=F", "BZJ26=F", "COIL.L"]
+    for sym in brent_alts:
+        v = fetch_yahoo(sym)
+        if v and 50 < v < 200:
+            if v > data.get("brent", 0):
+                data["brent"] = v
+                print(f"[{now()}] Brent updated from {sym}: ${v:.2f}")
+            break
+
+    # Gold — try spot XAUUSD via alternative
+    gold_alts = ["XAUUSD=X", "GLD"]
+    for sym in gold_alts:
+        v = fetch_yahoo(sym)
+        if v:
+            # GLD ETF trades at ~1/10 of gold price
+            if sym == "GLD": v = v * 10
+            if 1000 < v < 8000 and v > data.get("gold", 0):
+                data["gold"] = v
+                print(f"[{now()}] Gold updated from {sym}: ${v:.2f}")
+            break
+
+    # BDI — try alternative symbols
+    for sym in ["^BDI", "BDI", "BDIY"]:
+        v = fetch_yahoo(sym)
+        if v and 100 < v < 20000:
+            data["bdi"] = v
+            print(f"[{now()}] BDI from {sym}: {v:.0f}")
+            break
 
     # BTC from CoinGecko — more reliable than Yahoo for crypto
     btc = fetch_coingecko_btc()
