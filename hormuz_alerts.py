@@ -90,24 +90,28 @@ def fetch_yahoo(symbol, range_="5d"):
         url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=price"
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}, timeout=10)
         d = r.json()
-        price = d["quoteSummary"]["result"][0]["price"]["regularMarketPrice"]["raw"]
+        result = d["quoteSummary"]["result"][0]["price"]
+        price = result["regularMarketPrice"]["raw"]
+        mkt_state = result.get("marketState","?")
         if price and price > 0:
+            print(f"[{now()}] {symbol}: ${price:.2f} (state:{mkt_state}) via v10")
             return price
-    except:
-        pass
-    # Fallback to chart API
+    except Exception as e:
+        print(f"[{now()}] {symbol} v10 failed: {e}")
+    # Fallback to chart API — use meta.regularMarketPrice
     for interval, rng in [("5m","1d"), ("1h","5d"), ("1d","5d")]:
         try:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={rng}"
             r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             d = r.json()
-            # Try regularMarketPrice first
             meta = d["chart"]["result"][0].get("meta", {})
             if meta.get("regularMarketPrice"):
+                print(f"[{now()}] {symbol}: ${meta['regularMarketPrice']:.2f} via chart meta")
                 return meta["regularMarketPrice"]
             closes = d["chart"]["result"][0]["indicators"]["quote"][0]["close"]
             closes = [c for c in closes if c is not None]
             if closes:
+                print(f"[{now()}] {symbol}: ${closes[-1]:.2f} via chart close (stale)")
                 return closes[-1]
         except:
             continue
@@ -166,16 +170,22 @@ def fetch_hormuztracker():
             and re.search(r'P.{0,3}I|club|marine\s*insur', html, re.I)
         )
 
-        # ── Carriers ──
-        cm = (re.search(r'(\d+)\s*/\s*(\d+)\s*(?:major\s*)?(?:shipping\s*)?(?:lines?|carriers?)\s*(?:suspended|halted|paused|stopped)', html, re.I)
-           or re.search(r'(\d+)\s*(?:of\s*)?(\d+)\s*(?:major\s*)?(?:carriers?|lines?|shippers?)\s*(?:suspended|halted|paused)', html, re.I)
-           or re.search(r'suspended[^\d]{0,30}(\d+)[^\d]{0,10}(\d+)', html, re.I))
+        # ── Carriers — look for small total (9 major lines), reject large numbers ──
+        cm = (re.search(r'(\d)\s*/\s*(9)\s*(?:major\s*)?(?:shipping\s*)?lines?\s*(?:suspended|halted|paused|stopped)', html, re.I)
+           or re.search(r'(\d)\s*(?:of\s*)?9\s*(?:major\s*)?(?:carriers?|lines?)\s*(?:suspended|halted)', html, re.I)
+           or re.search(r'(\d+)\s*/\s*(\d+)\s*(?:major\s*)?(?:shipping\s*)?lines?\s*(?:suspended|halted)', html, re.I))
         if cm:
-            result["carriers_out"] = int(cm.group(1))
-            result["carriers_total"] = int(cm.group(2))
-            print(f"[{now()}] Carriers: {cm.group(1)}/{cm.group(2)}")
+            out = int(cm.group(1))
+            total = int(cm.group(2))
+            # Sanity check — major shipping lines should be single digits
+            if total <= 20:
+                result["carriers_out"] = out
+                result["carriers_total"] = total
+                print(f"[{now()}] Carriers: {out}/{total}")
+            else:
+                print(f"[{now()}] Carriers: rejected {out}/{total} (total too large, keeping seeded 9/9)")
         else:
-            print(f"[{now()}] Carriers: no match")
+            print(f"[{now()}] Carriers: no match, keeping seeded 9/9")
 
         # ── Conflict day — try scraping, fallback to calculation ──
         dm = (re.search(r'day\s+(\d+)\s+of\s+conflict', html, re.I)
@@ -283,7 +293,7 @@ def refresh_data():
     BOUNDS = {
         "brent":(50,200), "wti":(40,190), "gold":(1000,8000),
         "spx":(2000,10000), "tsy":(0.1,15), "btc":(1000,500000),
-        "dxy":(70,140), "kospi":(1000,4000), "nikkei":(15000,55000),
+        "dxy":(70,140), "kospi":(1000,6000), "nikkei":(15000,55000),
         "bdi":(100,10000), "ttf":(5,500)
     }
     for key, sym in symbols.items():
