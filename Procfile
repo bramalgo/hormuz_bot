@@ -1,1 +1,1 @@
-worker: python hormuz_alerts.py
+web: python hormuz_alerts.py
