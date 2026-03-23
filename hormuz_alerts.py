@@ -388,80 +388,30 @@ def calc_phase():
     return 0
 
 def refresh_data():
-    """Fetch all market data."""
-    print(f"[{now()}] Fetching data...")
-    symbols = {
-        "brent": "BZ=F", "wti": "CL=F", "gold": "GC=F",
-        "spx": "^GSPC", "tsy": "^TNX",
-        "dxy": "DX-Y.NYB", "kospi": "^KS11", "nikkei": "^N225", "bdi": "^BDI",
-        "ttf": "TTF=F"
-    }
-    # Sanity bounds — reject values outside realistic ranges
-    BOUNDS = {
-        "brent":(50,200), "wti":(40,190), "gold":(1000,8000),
-        "spx":(2000,10000), "tsy":(0.1,15), "btc":(1000,500000),
-        "dxy":(70,140), "kospi":(1000,8000), "nikkei":(15000,55000),
-        "bdi":(100,10000), "ttf":(5,500)
-    }
-    for key, sym in symbols.items():
-        v = fetch_yahoo(sym)
-        if v:
-            lo, hi = BOUNDS.get(key, (0, float('inf')))
-            if lo <= v <= hi:
-                data[key] = v
-                if key in ("kospi","nikkei","spx"):
-                    print(f"[{now()}] {key}: {v:.0f}")
-            else:
-                print(f"[{now()}] {key} value {v} out of bounds ({lo}-{hi}), skipping")
+    """Fetch HormuzTracker + AIS data only. Market prices come via TradingView webhooks."""
+    print(f"[{now()}] Refreshing HormuzTracker + AIS...")
 
-    # Brent note: BZ=F returns previous day close (~$4 lag vs spot)
-    # This is Yahoo's limitation for commodity futures on free tier
-    print(f"[{now()}] Brent via BZ=F: ${data.get('brent',0):.2f} (prev close)")
-
-    # Gold — use XAUUSD=X (spot) first, GLD ETF as fallback
-    for sym in ["XAUUSD=X", "GC=F"]:
-        v = fetch_yahoo(sym)
-        if v and 1000 < v < 8000:
-            data["gold"] = v
-            print(f"[{now()}] Gold from {sym}: ${v:.2f}")
-            break
-
-    # BDI — try Yahoo symbols, then hardcode last known if all fail
-    bdi_fetched = False
-    for sym in ["^BDI", "BDI", "BDIY", "BDY"]:
-        v = fetch_yahoo(sym)
-        if v and 100 < v < 20000:
-            data["bdi"] = v
-            print(f"[{now()}] BDI from {sym}: {v:.0f}")
-            bdi_fetched = True
-            break
-    if not bdi_fetched:
-        print(f"[{now()}] BDI: all fetches failed, keeping last known: {data.get('bdi','?')}")
-
-    # BTC from CoinGecko — more reliable than Yahoo for crypto
-    btc = fetch_coingecko_btc()
-    if btc: data["btc"] = btc
-
+    # HormuzTracker scrape
     ht = fetch_hormuztracker()
     data.update(ht)
 
-    # Override vessel count with AIS data if available (more accurate)
+    # AIS vessel count
     if AISSTREAM_KEY:
         ais_count = fetch_ais_vessels()
         if ais_count is not None:
             data["hormuz"] = ais_count
-            print(f"[{now()}] Using AIS vessel count: {ais_count}")
-        else:
-            print(f"[{now()}] AIS unavailable, using HormuzTracker scrape")
+            print(f"[{now()}] AIS vessel count: {ais_count}")
 
-    # Track brent high days
+    # Track brent high days (uses last TV webhook price)
     if data.get("brent", 0) >= 120:
         state["brent_high_days"] = state.get("brent_high_days", 0) + 1
     else:
         state["brent_high_days"] = 0
 
-    print(f"[{now()}] Brent=${data.get('brent','?'):.1f} Hormuz={data.get('hormuz','?')}/day "
-          f"Phase={calc_phase()} Ceasefire={data.get('ceasefire','?')}")
+    # Always calculate conflict day
+    data["conflict_day"] = int((time.time() - datetime(2026,2,28).timestamp()) / 86400)
+
+    print(f"[{now()}] Brent=${data.get('brent',0):.1f} Hormuz={data.get('hormuz','N/A')}/day Phase={calc_phase()}")
     state["last_fetch_time"] = now()
 
 def check_alerts():
