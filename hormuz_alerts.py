@@ -300,7 +300,7 @@ def refresh_data():
     # Always calculate conflict day
     data["conflict_day"] = int((time.time() - datetime(2026,2,28).timestamp()) / 86400)
 
-    print(f"[{now()}] Brent=${data.get('brent',0):.1f} Hormuz={data.get('hormuz','N/A')}/day Phase={calc_phase()}")
+    print(f"[{now()}] Brent=${(data.get('brent') or 0):.1f} Hormuz={data.get('hormuz','N/A')}/day Phase={calc_phase()}")
     state["last_fetch_time"] = now()
 
 def check_alerts():
@@ -314,7 +314,7 @@ def check_alerts():
         send(
             f"⚡ <b>PHASE CHANGE: {old['lbl']} → {new['lbl']}</b>\n\n"
             f"<b>{new['name']}</b>\n{new['rec']}\n\n"
-            f"Brent: ${data.get('brent',0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
+            f"Brent: ${(data.get('brent') or 0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
             f"🎯 <b>Action required within 24–48h</b>"
         )
     state["phase"] = ph
@@ -325,7 +325,7 @@ def check_alerts():
         labels = {"talks":"Formal talks underway","announced":"Ceasefire ANNOUNCED","holding":"Ceasefire holding"}
         send(
             f"🕊 <b>CEASEFIRE: {labels.get(cf,cf)}</b>\n\n"
-            f"Brent: ${data.get('brent',0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
+            f"Brent: ${(data.get('brent') or 0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
             f"⚡ Phase 2 window may open — monitor closely"
         )
     state["ceasefire"] = cf
@@ -335,7 +335,7 @@ def check_alerts():
     if b120 and not state["brent_120"]:
         send(
             f"🔴 <b>BRENT ABOVE $120 — BEAR CASE RISK</b>\n"
-            f"Brent: <b>${data.get('brent',0):.1f}</b>\n"
+            f"Brent: <b>${(data.get('brent') or 0):.1f}</b>\n"
             f"If sustained 3+ days → Bear case. Day {state['brent_high_days']}/3."
         )
     state["brent_120"] = b120
@@ -346,7 +346,7 @@ def check_alerts():
         send(
             f"✅ <b>P&I CLUB COVER REINSTATED</b>\n"
             f"At least one IG P&I Club reinstated war-risk cover.\n"
-            f"Phase 1 trigger. Hormuz: {data.get('hormuz','?')}/day | Brent: ${data.get('brent',0):.1f}"
+            f"Phase 1 trigger. Hormuz: {data.get('hormuz','?')}/day | Brent: ${(data.get('brent') or 0):.1f}"
         )
     state["pi_withdrawn"] = pi
 
@@ -356,7 +356,7 @@ def check_alerts():
         send(
             f"🚢 <b>HORMUZ: {data.get('hormuz','?')} VESSELS/DAY</b>\n"
             f"Crossed the 40/day Phase 1 trigger.\n"
-            f"Brent: ${data.get('brent',0):.1f}"
+            f"Brent: ${(data.get('brent') or 0):.1f}"
         )
     state["hormuz_40"] = h40
 
@@ -366,7 +366,7 @@ def send_summary():
     p = PHASES[ph]
     day = data.get("conflict_day") or data.get("conflict_day_calc") or \
           int((time.time() - datetime(2026,2,28).timestamp()) / 86400)
-    brent = data.get("brent", 0)
+    brent = (data.get("brent") or 0)
     pct = (brent - 71.32) / 71.32 * 100
     msg = (
         f"🛢 <b>Hormuz Dashboard — Summary</b>\n"
@@ -375,8 +375,8 @@ def send_summary():
         f"{p['rec']}\n\n"
         f"💰 <b>Markets</b>\n"
         f"Brent: ${brent:.1f} (+{pct:.0f}% vs pre-conflict)\n"
-        f"WTI: ${data.get('wti',0):.1f} | Gold: ${data.get('gold',0):,.0f}\n"
-        f"BTC: ${data.get('btc',0):,.0f} | SPX: {data.get('spx',0):,.0f}\n\n"
+        f"WTI: ${(data.get('wti') or 0):.1f} | Gold: ${(data.get('gold') or 0):,.0f}\n"
+        f"BTC: ${(data.get('btc') or 0):,.0f} | SPX: {(data.get('spx') or 0):,.0f}\n\n"
         f"🚢 <b>Strait</b>\n"
         f"Hormuz: {data.get('hormuz','?')}/day (need 40+ for Phase 1)\n"
         f"Carriers: {str(data.get('carriers_out'))+'/'+str(data.get('carriers_total'))+' suspended' if data.get('carriers_out') is not None else 'N/A'}\n"
@@ -419,9 +419,9 @@ def handle_commands():
             elif cmd == "/brent":
                 send(
                     f"🛢 <b>Oil prices</b>\n"
-                    f"Brent: <b>${data.get('brent',0):.1f}</b>\n"
-                    f"WTI: ${data.get('wti',0):.1f}\n"
-                    f"TTF gas: €{data.get('ttf',0):.1f}/MWh\n"
+                    f"Brent: <b>${(data.get('brent') or 0):.1f}</b>\n"
+                    f"WTI: ${(data.get('wti') or 0):.1f}\n"
+                    f"TTF gas: €{(data.get('ttf') or 0):.1f}/MWh\n"
                     f"IEA reserves: {data.get('ieaMb',400)}mb"
                 )
             elif cmd == "/strait":
@@ -448,7 +448,7 @@ def handle_commands():
                     f"Uptime: {hours}h {mins}m | Last fetch: {last}\n"
                     f"Conflict: Day {day}\n\n"
                     f"📊 <b>{p['lbl']} — {p['name']}</b>\n"
-                    f"Brent: ${data.get('brent',0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
+                    f"Brent: ${(data.get('brent') or 0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
                     f"Ceasefire: {cf_label}\n"
                     f"P&I: {'Cancelled' if data.get('pi_withdrawn') else 'Active'}\n\n"
                     f"🔔 Alerts: every 15 min | Commands: every 10s"
@@ -769,7 +769,7 @@ def main():
         f"🟢 <b>Hormuz Alert Bot started</b>\n"
         f"Monitoring every 5 minutes.\n"
         f"Current: {PHASES[calc_phase()]['lbl']}\n"
-        f"Brent: ${data.get('brent',0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
+        f"Brent: ${(data.get('brent') or 0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
         f"Send /help for commands."
     )
 
