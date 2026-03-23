@@ -466,11 +466,14 @@ def handle_commands():
                     f"P&I: {'Cancelled' if data.get('pi_withdrawn') else 'Active'}\n\n"
                     f"🔔 Alerts: every 15 min | Commands: every 10s"
                 )
-            elif cmd == "/alerts":
-                t = state.get("triggers", {
-                    "phase":True,"brent120":True,"ceasefire":True,
-                    "pi":True,"hormuz40":True,"daily":False
-                })
+            elif cmd == "/alerts" or cmd == "/alerts reset":
+                DEFAULT_TRIGGERS = {"phase":True,"brent120":True,"ceasefire":True,"pi":True,"hormuz40":True,"daily":False}
+                if cmd == "/alerts reset" or "triggers" not in state:
+                    state["triggers"] = DEFAULT_TRIGGERS.copy()
+                    send("✅ All alert triggers reset to defaults.")
+                # Merge with defaults so any missing keys fall back to True
+                t = {**DEFAULT_TRIGGERS, **state["triggers"]}
+                state["triggers"] = t  # persist the merged version
                 send(
                     "🔔 <b>Active alert triggers</b>\n\n"
                     f"{'✅' if t.get('phase') else '❌'} Phase change\n"
@@ -479,21 +482,24 @@ def handle_commands():
                     f"{'✅' if t.get('pi') else '❌'} P&I reinstatement\n"
                     f"{'✅' if t.get('hormuz40') else '❌'} Hormuz 40+ vessels\n"
                     f"{'✅' if t.get('daily') else '❌'} Daily 8am summary\n\n"
-                    "Use /daily on or /daily off to toggle the daily summary."
+                    "Use /daily on|off to toggle daily summary.\n"
+                    "Use /alerts reset to restore all defaults."
                 )
             elif cmd.startswith("/daily"):
+                # Always preserve existing triggers — only toggle daily
+                DEFAULT_TRIGGERS = {"phase":True,"brent120":True,"ceasefire":True,"pi":True,"hormuz40":True,"daily":False}
+                if "triggers" not in state:
+                    state["triggers"] = DEFAULT_TRIGGERS.copy()
                 parts = cmd.split()
                 if len(parts) > 1 and parts[1] == "on":
-                    state["triggers"] = state.get("triggers", {})
                     state["triggers"]["daily"] = True
                     schedule.every().day.at("08:00").do(send_summary)
                     send("✅ Daily 8am summary enabled.")
                 elif len(parts) > 1 and parts[1] == "off":
-                    state["triggers"] = state.get("triggers", {})
                     state["triggers"]["daily"] = False
                     send("❌ Daily 8am summary disabled.")
                 else:
-                    daily_on = state.get("triggers", {}).get("daily", False)
+                    daily_on = state["triggers"].get("daily", False)
                     send(f"Daily summary is currently {'✅ ON' if daily_on else '❌ OFF'}.\nUse /daily on or /daily off to change.")
             elif cmd == "/help":
                 send(
@@ -504,6 +510,7 @@ def handle_commands():
                     "/strait — Hormuz shipping\n"
                     "/status — Bot health + uptime\n"
                     "/alerts — Show active triggers\n"
+                    "/alerts reset — Restore all triggers to defaults\n"
                     "/daily on|off — Toggle daily summary\n"
                     "/help — This message"
                 )
