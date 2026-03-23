@@ -55,14 +55,19 @@ state = {
 }
 
 data = {
-    # Seeded defaults — updated on each fetch
-    "brent": 111.89, "wti": 99.80, "gold": 4428.0,
-    "spx": 6506, "tsy": 4.39, "btc": 68900,
-    "dxy": 99.5, "kospi": 5452, "nikkei": 35800, "bdi": 2056,
-    "ttf": 60.20, "vlcc": 285000,
-    "hormuz": None, "carriers_out": None, "carriers_total": None,
-    "pi_withdrawn": True, "ceasefire": "none",
-    "conflict_day": 22, "conflict_day_calc": 22, "ieaMb": 400
+    # TV-sourced — start None, populated by WebSocket
+    "brent": None, "wti": None, "gold": None,
+    "spx": None, "tsy": None, "btc": None,
+    "dxy": None, "kospi": None, "nikkei": None,
+    "bdi": None, "ttf": None,
+    # Non-TV — known facts
+    "vlcc": 285000,
+    "hormuz": None,
+    "carriers_out": 9, "carriers_total": 9,
+    "pi_withdrawn": True,
+    "ceasefire": "none",
+    "conflict_day": 23, "conflict_day_calc": 23,
+    "ieaMb": 400
 }
 
 def send(msg):
@@ -289,9 +294,10 @@ def fetch_hormuztracker():
             else:
                 print(f"[{now()}] Carriers: rejected {out}/{total} (total too large, keeping seeded 9/9)")
         else:
-            print(f"[{now()}] Carriers: no confident match — showing N/A")
-            result["carriers_out"] = None
-            result["carriers_total"] = None
+            print(f"[{now()}] Carriers: no match — using known 9/9")
+            # Keep known fact: 9/9 major lines suspended since conflict start
+            result["carriers_out"] = 9
+            result["carriers_total"] = 9
 
         # ── Conflict day — try scraping, fallback to calculation ──
         dm = (re.search(r'day\s+(\d+)\s+of\s+conflict', html, re.I)
