@@ -118,17 +118,28 @@ def fetch_yahoo(symbol, range_="5d"):
     return None
 
 def fetch_coingecko_btc():
-    """Fetch BTC price from CoinGecko — real-time, reliable."""
+    """Fetch BTC price from CoinGecko with fallback to Yahoo."""
+    # Try CoinGecko
+    for attempt in range(2):
+        try:
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            d = r.json()
+            price = d["bitcoin"]["usd"]
+            print(f"[{now()}] CoinGecko BTC: ${price:,.0f}")
+            return price
+        except Exception as e:
+            print(f"[{now()}] CoinGecko attempt {attempt+1} failed: {e}")
+            time.sleep(2)
+    # Fallback to Yahoo
     try:
-        url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        d = r.json()
-        price = d["bitcoin"]["usd"]
-        print(f"[{now()}] CoinGecko BTC: ${price:,.0f}")
-        return price
-    except Exception as e:
-        print(f"[{now()}] CoinGecko BTC error: {e}")
-        return None
+        price = fetch_yahoo("BTC-USD")
+        if price:
+            print(f"[{now()}] BTC via Yahoo fallback: ${price:,.0f}")
+            return price
+    except:
+        pass
+    return None
 
 def fetch_hormuztracker():
     """Scrape key data from HormuzTracker."""
@@ -285,15 +296,15 @@ def refresh_data():
     print(f"[{now()}] Fetching data...")
     symbols = {
         "brent": "BZ=F", "wti": "CL=F", "gold": "GC=F",
-        "spx": "%5EGSPC", "tsy": "%5ETNX",
-        "dxy": "DX-Y.NYB", "kospi": "%5EKS11", "nikkei": "%5EN225", "bdi": "%5EBDI",
+        "spx": "^GSPC", "tsy": "^TNX",
+        "dxy": "DX-Y.NYB", "kospi": "^KS11", "nikkei": "^N225", "bdi": "^BDI",
         "ttf": "TTF=F"
     }
     # Sanity bounds — reject values outside realistic ranges
     BOUNDS = {
         "brent":(50,200), "wti":(40,190), "gold":(1000,8000),
         "spx":(2000,10000), "tsy":(0.1,15), "btc":(1000,500000),
-        "dxy":(70,140), "kospi":(1000,6000), "nikkei":(15000,55000),
+        "dxy":(70,140), "kospi":(1000,4000), "nikkei":(15000,55000),
         "bdi":(100,10000), "ttf":(5,500)
     }
     for key, sym in symbols.items():
