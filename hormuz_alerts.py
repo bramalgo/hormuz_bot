@@ -198,9 +198,10 @@ def fetch_hormuztracker():
 
 def calc_phase():
     b = data.get("brent") or 92
-    h = data.get("hormuz", 0)
+    h = data.get("hormuz") or 0
     cf = data.get("ceasefire", "none")
-    pi = data.get("pi_withdrawn", True)
+    pi = data.get("pi_withdrawn")
+    if pi is None: pi = True  # default withdrawn
 
     if b >= 120 and state["brent_high_days"] >= 3: return "bear"
     if cf in ("holding", "announced"): return 2
@@ -341,7 +342,8 @@ def check_alerts():
     state["brent_120"] = b120
 
     # P&I reinstatement
-    pi = data.get("pi_withdrawn", True)
+    pi = data.get("pi_withdrawn")
+    if pi is None: pi = True  # default withdrawn
     if not pi and state["pi_withdrawn"]:
         send(
             f"✅ <b>P&I CLUB COVER REINSTATED</b>\n"
@@ -501,6 +503,10 @@ def handle_commands():
 tv_session = "qs_" + "".join(random.choices(string.ascii_lowercase, k=12))
 tv_ws = None
 
+def tv_format_msg(func, args):
+    msg = json.dumps({"m": func, "p": args}, separators=(",", ":"))
+    return f"~m~{len(msg)}~m~{msg}"
+
 
 TV_SYMBOLS = {
     "UKOIL":   "brent",
@@ -601,11 +607,6 @@ def add_cors(response):
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     return response
-
-@app.route('/health', methods=['OPTIONS'])
-@app.route('/webhook', methods=['OPTIONS'])
-def options():
-    return '', 204
 
 # Symbol map from TradingView ticker → our data key
 TV_SYMBOL_MAP = {
@@ -719,15 +720,6 @@ def health():
         "ieaMb":         data.get("ieaMb",400)
     }))
     resp.headers['Cache-Control'] = 'no-store'
-    resp.headers['Access-Control-Allow-Origin'] = '*'
-    resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
-    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    return resp
-
-@app.route('/health', methods=['OPTIONS'])
-def health_options():
-    from flask import make_response
-    resp = make_response('', 204)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
     resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
