@@ -84,12 +84,27 @@ def now():
     return datetime.now().strftime("%H:%M:%S")
 
 def fetch_yahoo(symbol, range_="5d"):
-    """Fetch latest price from Yahoo Finance — tries 1m intraday first for live price."""
-    for interval, rng in [("1m","1d"), ("5m","1d"), ("1h","5d"), ("1d","5d")]:
+    """Fetch price from Yahoo Finance — uses regularMarketPrice for live data."""
+    # Try v10/quoteSummary first — gives live market price not delayed close
+    try:
+        url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=price"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}, timeout=10)
+        d = r.json()
+        price = d["quoteSummary"]["result"][0]["price"]["regularMarketPrice"]["raw"]
+        if price and price > 0:
+            return price
+    except:
+        pass
+    # Fallback to chart API
+    for interval, rng in [("5m","1d"), ("1h","5d"), ("1d","5d")]:
         try:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={rng}"
             r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             d = r.json()
+            # Try regularMarketPrice first
+            meta = d["chart"]["result"][0].get("meta", {})
+            if meta.get("regularMarketPrice"):
+                return meta["regularMarketPrice"]
             closes = d["chart"]["result"][0]["indicators"]["quote"][0]["close"]
             closes = [c for c in closes if c is not None]
             if closes:
@@ -518,7 +533,7 @@ def main():
 
     send(
         f"🟢 <b>Hormuz Alert Bot started</b>\n"
-        f"Monitoring every 15 minutes.\n"
+        f"Monitoring every 5 minutes.\n"
         f"Current: {PHASES[calc_phase()]['lbl']}\n"
         f"Brent: ${data.get('brent',0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
         f"Send /help for commands."
