@@ -730,6 +730,18 @@ def start_tv_feed():
 # ── FLASK WEBHOOK SERVER ──
 app = Flask(__name__)
 
+@app.after_request
+def add_cors(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
+
+@app.route('/health', methods=['OPTIONS'])
+@app.route('/webhook', methods=['OPTIONS'])
+def options():
+    return '', 204
+
 # Symbol map from TradingView ticker → our data key
 TV_SYMBOL_MAP = {
     "UKOIL":   "brent",   # Brent crude
@@ -841,8 +853,19 @@ def health():
         "conflictDay":   data.get("conflict_day",23),
         "ieaMb":         data.get("ieaMb",400)
     }))
-    resp.headers['Access-Control-Allow-Origin'] = '*'
     resp.headers['Cache-Control'] = 'no-store'
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return resp
+
+@app.route('/health', methods=['OPTIONS'])
+def health_options():
+    from flask import make_response
+    resp = make_response('', 204)
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
     return resp
 
 def run_flask():
@@ -870,7 +893,6 @@ def main():
     refresh_data()
     state["start_time"] = time.time()
     state["last_fetch_time"] = now()
-    push_prices_to_jsonbin()  # push on startup
     # Set baseline state so we don't fire spurious alerts on startup
     state["phase"] = calc_phase()
     state["ceasefire"] = data.get("ceasefire", "none")
