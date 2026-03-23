@@ -6,6 +6,7 @@ Usage: python3 hormuz_alerts.py
 """
 
 import os, json, time, requests, schedule, threading, asyncio
+import websocket
 from flask import Flask, request as freq, jsonify
 from datetime import datetime
 from dotenv import load_dotenv
@@ -888,4 +889,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
