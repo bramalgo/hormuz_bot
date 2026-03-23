@@ -609,6 +609,117 @@ def handle_commands():
         print(f"[{now()}] Command poll error: {e}")
 
 
+# ── TRADINGVIEW WEBSOCKET FEED ──
+TV_SYMBOLS = {
+    "UKOIL":   "brent",
+    "USOIL":   "wti",
+    "GOLD":    "gold",
+    "SPX":     "spx",
+    "US10Y":   "tsy",
+    "BTCUSD":  "btc",
+    "DXY":     "dxy",
+    "KOSPI":   "kospi",
+    "NI225":   "nikkei",
+    "TTF1!":   "ttf",
+    "BDI":     "bdi",
+}
+
+TV_BOUNDS = {
+    "brent":(50,200),"wti":(40,190),"gold":(1000,8000),
+    "spx":(2000,10000),"tsy":(0.1,15),"btc":(1000,500000),
+    "dxy":(70,140),"kospi":(1000,8000),"nikkei":(15000,60000),
+    "ttf":(5,500),"bdi":(100,20000)
+}
+
+def tv_generate_session():
+    import random, string
+    return "qs_" + "".join(random.choices(string.ascii_lowercase, k=12))
+
+def tv_format_msg(func, args):
+    msg = json.dumps({"m": func, "p": args}, separators=(",", ":"))
+    return f"~m~{len(msg)}~m~{msg}"
+
+tv_session = tv_generate_session()
+tv_ws = None
+tv_last_price_time = {}
+
+def tv_on_price(key, price):
+    """Called when TradingView pushes a new price."""
+    lo, hi = TV_BOUNDS.get(key, (0, float('inf')))
+    if lo <= price <= hi:
+        old = data.get(key, 0)
+        data[key] = price
+        tv_last_price_time[key] = time.time()
+        if abs(price - old) > 0.001:  # only log on change
+            print(f"[TV] {key}: {price:.2f}")
+            push_prices_to_jsonbin()
+            check_alerts()
+
+def tv_on_message(ws, msg):
+    import re
+    patterns = re.findall(r"~m~\d+~m~(.+?)(?=~m~|$)", msg)
+    for p in patterns:
+        try:
+            d = json.loads(p)
+            if d.get("m") == "qsd":
+                p_data = d.get("p", [])
+                if len(p_data) >= 2:
+                    sym = p_data[1].get("n", "")
+                    v = p_data[1].get("v", {})
+                    price = v.get("lp") or v.get("last_price")
+                    if price:
+                        for tv_sym, key in TV_SYMBOLS.items():
+                            if tv_sym in sym:
+                                tv_on_price(key, float(price))
+                                break
+        except:
+            pass
+        if "~h~" in p:
+            try: ws.send(f"~m~{len(p)}~m~{p}")
+            except: pass
+
+def tv_on_open(ws):
+    print(f"[{now()}] TradingView WebSocket connected")
+    def setup():
+        time.sleep(0.3)
+        ws.send(tv_format_msg("set_auth_token", ["unauthorized_user_token"]))
+        time.sleep(0.3)
+        ws.send(tv_format_msg("quote_create_session", [tv_session]))
+        time.sleep(0.3)
+        ws.send(tv_format_msg("quote_set_fields", [tv_session, "lp", "volume"]))
+        time.sleep(0.3)
+        for sym in TV_SYMBOLS.keys():
+            ws.send(tv_format_msg("quote_add_symbols", [tv_session, sym]))
+            time.sleep(0.05)
+        print(f"[{now()}] TradingView: subscribed to {len(TV_SYMBOLS)} symbols")
+    threading.Thread(target=setup, daemon=True).start()
+
+def tv_on_error(ws, error):
+    print(f"[{now()}] TradingView error: {error}")
+
+def tv_on_close(ws, *args):
+    print(f"[{now()}] TradingView disconnected — reconnecting in 30s")
+    time.sleep(30)
+    start_tv_feed()
+
+def start_tv_feed():
+    global tv_ws
+    try:
+        tv_ws = websocket.WebSocketApp(
+            "wss://data.tradingview.com/socket.io/websocket?from=chart&date=2026_03_23",
+            on_open=tv_on_open,
+            on_message=tv_on_message,
+            on_error=tv_on_error,
+            on_close=tv_on_close,
+            header={"Origin":"https://www.tradingview.com","User-Agent":"Mozilla/5.0"}
+        )
+        t = threading.Thread(target=tv_ws.run_forever, kwargs={"ping_interval":30,"ping_timeout":10}, daemon=True)
+        t.start()
+        print(f"[{now()}] TradingView feed starting...")
+    except Exception as e:
+        print(f"[{now()}] TradingView feed error: {e}")
+
+
 # ── FLASK WEBHOOK SERVER ──
 app = Flask(__name__)
 
@@ -639,46 +750,62 @@ def webhook():
         if not body:
             return jsonify({"error":"no body"}), 400
 
-        symbol = body.get('symbol','').upper()
-        price  = body.get('price')
-        key    = body.get('key')  # can override symbol map
+        BOUNDS = {
+            "brent":(50,200),"wti":(40,190),"gold":(1000,8000),
+            "spx":(2000,10000),"tsy":(0.1,15),"btc":(1000,500000),
+            "dxy":(70,140),"kospi":(1000,8000),"nikkei":(15000,60000),
+            "ttf":(5,500),"bdi":(100,20000)
+        }
 
-        if price is None:
-            return jsonify({"error":"no price"}), 400
+        def update_key(key, value):
+            try:
+                v = float(value)
+                lo,hi = BOUNDS.get(key,(0,float('inf')))
+                if lo <= v <= hi:
+                    data[key] = v
+                    return True
+                else:
+                    print(f"[{now()}] {key}={v} out of bounds, skipped")
+                    return False
+            except:
+                return False
 
-        price = float(price)
+        updated = []
 
-        # Resolve key from symbol or direct key
-        if not key:
-            # Try exact match first, then partial
+        # Multi-price message from Pine Script
+        if body.get('multi'):
+            keys = ["brent","wti","gold","spx","tsy","btc","dxy","kospi","nikkei","ttf","bdi"]
+            for key in keys:
+                if key in body and update_key(key, body[key]):
+                    updated.append(f"{key}={body[key]}")
+            print(f"[{now()}] Multi-price webhook: {', '.join(updated)}")
+
+        # Single price message
+        else:
+            symbol = body.get('symbol','').upper()
+            price  = body.get('price')
+            if price is None:
+                return jsonify({"error":"no price"}), 400
             key = TV_SYMBOL_MAP.get(symbol)
             if not key:
                 for tv_sym, data_key in TV_SYMBOL_MAP.items():
                     if tv_sym in symbol or symbol in tv_sym:
                         key = data_key
                         break
+            if not key:
+                return jsonify({"error":f"unknown symbol {symbol}"}), 400
+            if update_key(key, price):
+                updated.append(f"{key}={price}")
+                print(f"[{now()}] Webhook: {symbol} → {key} = {price}")
 
-        if not key:
-            return jsonify({"error":f"unknown symbol {symbol}"}), 400
-
-        # Sanity bounds
-        BOUNDS = {
-            "brent":(50,200),"wti":(40,190),"gold":(1000,8000),
-            "spx":(2000,10000),"tsy":(0.1,15),"btc":(1000,500000),
-            "dxy":(70,140),"kospi":(1000,8000),"nikkei":(15000,60000)
-        }
-        lo,hi = BOUNDS.get(key,(0,float('inf')))
-        if not (lo <= price <= hi):
-            return jsonify({"error":f"{key} price {price} out of bounds"}), 400
-
-        data[key] = price
-        print(f"[{now()}] TradingView webhook: {symbol} → {key} = {price}")
+        if not updated:
+            return jsonify({"error":"no valid prices"}), 400
 
         # Push to JSONBin immediately
         push_prices_to_jsonbin()
         check_alerts()
 
-        return jsonify({"ok":True,"key":key,"price":price})
+        return jsonify({"ok":True,"updated":updated})
     except Exception as e:
         print(f"[{now()}] Webhook error: {e}")
         return jsonify({"error":str(e)}), 500
@@ -694,9 +821,12 @@ def health():
     })
 
 def run_flask():
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)  # suppress Flask dev server noise
     port = int(os.getenv("PORT", 8080))
     print(f"[{now()}] Flask webhook server on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
 def main():
     print("=" * 50)
@@ -735,15 +865,27 @@ def main():
     schedule.every(5).minutes.do(lambda: (refresh_data(), push_prices_to_jsonbin(), check_alerts(), state.update({"last_fetch_time": now()})))
     schedule.every().day.at("08:00").do(send_summary)
 
-    # Start Flask webhook server in background thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    # Start TradingView WebSocket feed
+    start_tv_feed()
+    time.sleep(2)  # let TV connect before starting bot loop
 
-    print(f"[{now()}] Bot running. Ctrl+C to stop.")
-    while True:
-        schedule.run_pending()
-        handle_commands()
-        time.sleep(10)  # poll commands every 10s
+    # Run bot schedule + command polling in background thread
+    def bot_loop():
+        print(f"[{now()}] Bot loop running...")
+        while True:
+            try:
+                schedule.run_pending()
+                handle_commands()
+            except Exception as e:
+                print(f"[{now()}] Bot loop error: {e}")
+            time.sleep(10)
+
+    bot_thread = threading.Thread(target=bot_loop, daemon=True)
+    bot_thread.start()
+
+    print(f"[{now()}] Bot running. Starting Flask on main thread...")
+    run_flask()  # Flask runs on main thread — keeps Railway happy  # poll commands every 10s
 
 if __name__ == "__main__":
     main()
+
