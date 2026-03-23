@@ -3,3 +3,4 @@ schedule
 python-dotenv
 websocket-client
 flask
+gunicorn
