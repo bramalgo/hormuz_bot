@@ -754,32 +754,30 @@ def main():
         print("   Or edit this script directly.\n")
         return
 
-    # Initial fetch
-    refresh_data()
+    # Start TradingView WebSocket feed FIRST — gets prices immediately
+    start_tv_feed()
+    time.sleep(1)
+
+    # Run initial HormuzTracker fetch in background — don't block startup
+    threading.Thread(target=refresh_data, daemon=True).start()
+
     state["start_time"] = time.time()
     state["last_fetch_time"] = now()
-    # Set baseline state so we don't fire spurious alerts on startup
     state["phase"] = calc_phase()
     state["ceasefire"] = data.get("ceasefire", "none")
     state["brent_120"] = (data.get("brent") or 0) >= 120
     state["pi_withdrawn"] = data.get("pi_withdrawn", True)
-    state["hormuz_40"] = data.get("hormuz", 0) >= 40
+    state["hormuz_40"] = (data.get("hormuz") or 0) >= 40
 
     send(
         f"🟢 <b>Hormuz Alert Bot started</b>\n"
-        f"Monitoring every 5 minutes.\n"
-        f"Current: {PHASES[calc_phase()]['lbl']}\n"
-        f"Brent: ${(data.get('brent') or 0):.1f} | Hormuz: {data.get('hormuz','?')}/day\n"
+        f"TradingView feed connecting...\n"
         f"Send /help for commands."
     )
 
     # Schedule
     schedule.every(5).minutes.do(lambda: (refresh_data(), check_alerts(), state.update({"last_fetch_time": now()})))
     schedule.every().day.at("08:00").do(send_summary)
-
-    # Start TradingView WebSocket feed
-    start_tv_feed()
-    time.sleep(2)  # let TV connect before starting bot loop
 
     # Run bot schedule + command polling in background thread
     def bot_loop():
