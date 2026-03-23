@@ -617,7 +617,8 @@ TV_SYMBOLS = {
     "GOLD":    "gold",
     "SPX":     "spx",
     "US10Y":   "tsy",
-    "BTCUSD":  "btc",
+    "BTCUSD":  "btc",   # Bitstamp — may lag
+    "BTCUSDT": "btc",   # Binance — more liquid
     "DXY":     "dxy",
     "KOSPI":   "kospi",
     "NI225":   "nikkei",
@@ -653,7 +654,6 @@ def tv_on_price(key, price):
         tv_last_price_time[key] = time.time()
         if abs(price - old) > 0.001:  # only log on change
             print(f"[TV] {key}: {price:.2f}")
-            push_prices_to_jsonbin()
             check_alerts()
 
 def tv_on_message(ws, msg):
@@ -731,7 +731,8 @@ TV_SYMBOL_MAP = {
     "GOLD":    "gold",    # Gold spot
     "SPX":     "spx",     # S&P 500
     "US10Y":   "tsy",     # US 10yr yield
-    "BTCUSD":  "btc",     # Bitcoin
+    "BTCUSD":  "btc",   # Bitstamp — may lag
+    "BTCUSDT": "btc",   # Binance — more liquid     # Bitcoin
     "DXY":     "dxy",     # USD index
     "KOSPI":   "kospi",   # KOSPI
     "NI225":   "nikkei",  # Nikkei 225
@@ -802,10 +803,7 @@ def webhook():
         if not updated:
             return jsonify({"error":"no valid prices"}), 400
 
-        # Push to JSONBin immediately
-        push_prices_to_jsonbin()
         check_alerts()
-
         return jsonify({"ok":True,"updated":updated})
     except Exception as e:
         print(f"[{now()}] Webhook error: {e}")
@@ -813,13 +811,33 @@ def webhook():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({
-        "status":"ok",
-        "conflict_day": data.get("conflict_day",23),
-        "brent": data.get("brent"),
-        "btc": data.get("btc"),
-        "vessels": data.get("hormuz")
-    })
+    from flask import make_response
+    resp = make_response(jsonify({
+        "status": "ok",
+        "ts": int(time.time()),
+        "brent":   data.get("brent"),
+        "wti":     data.get("wti"),
+        "gold":    data.get("gold"),
+        "spx":     data.get("spx"),
+        "tsy":     data.get("tsy"),
+        "btc":     data.get("btc"),
+        "dxy":     data.get("dxy"),
+        "kospi":   data.get("kospi"),
+        "nikkei":  data.get("nikkei"),
+        "ttf":     data.get("ttf"),
+        "bdi":     data.get("bdi"),
+        "vlcc":    data.get("vlcc"),
+        "hormuz":  data.get("hormuz"),
+        "carriersOut":   data.get("carriers_out"),
+        "carriersTotal": data.get("carriers_total"),
+        "piWithdrawn":   data.get("pi_withdrawn"),
+        "ceasefire":     data.get("ceasefire","none"),
+        "conflictDay":   data.get("conflict_day",23),
+        "ieaMb":         data.get("ieaMb",400)
+    }))
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 def run_flask():
     import logging
@@ -863,7 +881,7 @@ def main():
     )
 
     # Schedule
-    schedule.every(5).minutes.do(lambda: (refresh_data(), push_prices_to_jsonbin(), check_alerts(), state.update({"last_fetch_time": now()})))
+    schedule.every(5).minutes.do(lambda: (refresh_data(), check_alerts(), state.update({"last_fetch_time": now()})))
     schedule.every().day.at("08:00").do(send_summary)
 
     # Start TradingView WebSocket feed
