@@ -236,6 +236,7 @@ def fetch_ais_vessels():
                 pass
 
         def on_open(ws):
+            print(f"[{now()}] AISstream WebSocket connected")
             subscribe = {
                 "APIKey": AISSTREAM_KEY,
                 "BoundingBoxes": [[
@@ -254,9 +255,12 @@ def fetch_ais_vessels():
 
         def on_error(ws, error):
             print(f"[{now()}] AIS error: {error}")
+            result["count"] = len(vessels_seen)  # commit whatever we saw
             result["done"] = True
 
         def on_close(ws, *args):
+            if result["count"] is None:
+                result["count"] = len(vessels_seen)  # commit whatever we saw
             result["done"] = True
 
         ws_app = websocket.WebSocketApp(
