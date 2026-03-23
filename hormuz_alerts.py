@@ -5,7 +5,7 @@ Runs 24/7, sends alerts and responds to commands.
 Usage: python3 hormuz_alerts.py
 """
 
-import os, json, time, requests, schedule
+import os, json, time, requests, schedule, threading, asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -15,7 +15,8 @@ load_dotenv()
 BOT_TOKEN   = os.getenv("TG_TOKEN",    "")
 CHAT_ID     = os.getenv("TG_CHAT_ID",  "")
 JSONBIN_ID  = os.getenv("JSONBIN_ID",  "")
-JSONBIN_KEY = os.getenv("JSONBIN_KEY", "")
+JSONBIN_KEY    = os.getenv("JSONBIN_KEY",    "")
+AISSTREAM_KEY  = os.getenv("AISSTREAM_KEY", "")
 
 # Debug output — shows in Railway logs
 print(f"TG_TOKEN: {'SET ('+BOT_TOKEN[:8]+'...)' if BOT_TOKEN else 'NOT SET'}")
@@ -140,6 +141,83 @@ def fetch_coingecko_btc():
     except:
         pass
     return None
+
+
+# ── AIS VESSEL TRACKING ──
+# Hormuz Strait bounding box
+HORMUZ_BOX = {
+    "min_lat": 25.5, "max_lat": 27.5,
+    "min_lon": 56.0, "max_lon": 57.5
+}
+
+def fetch_ais_vessels():
+    """Count vessels in Hormuz Strait using AISstream.io WebSocket API."""
+    if not AISSTREAM_KEY:
+        return None
+    try:
+        import websocket
+        vessels_seen = set()
+        result = {"count": None, "done": False}
+
+        def on_message(ws, message):
+            try:
+                msg = json.loads(message)
+                mmsi = msg.get("MetaData", {}).get("MMSI")
+                if mmsi:
+                    vessels_seen.add(mmsi)
+            except:
+                pass
+
+        def on_open(ws):
+            subscribe = {
+                "APIKey": AISSTREAM_KEY,
+                "BoundingBoxes": [[
+                    [HORMUZ_BOX["min_lat"], HORMUZ_BOX["min_lon"]],
+                    [HORMUZ_BOX["max_lat"], HORMUZ_BOX["max_lon"]]
+                ]],
+                "FilterMessageTypes": ["PositionReport"]
+            }
+            ws.send(json.dumps(subscribe))
+            # Collect for 30 seconds then close
+            def close_after():
+                time.sleep(30)
+                result["count"] = len(vessels_seen)
+                result["done"] = True
+                ws.close()
+            t = threading.Thread(target=close_after, daemon=True)
+            t.start()
+
+        def on_error(ws, error):
+            print(f"[{now()}] AIS WebSocket error: {error}")
+            result["done"] = True
+
+        def on_close(ws, *args):
+            result["done"] = True
+
+        ws = websocket.WebSocketApp(
+            "wss://stream.aisstream.io/v0/stream",
+            on_open=on_open,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close
+        )
+        # Run in thread with 45s timeout
+        t = threading.Thread(target=ws.run_forever, daemon=True)
+        t.start()
+        timeout = 45
+        start = time.time()
+        while not result["done"] and time.time()-start < timeout:
+            time.sleep(1)
+        count = result.get("count")
+        if count is not None:
+            print(f"[{now()}] AIS vessels in Hormuz: {count} (30s window)")
+        return count
+    except ImportError:
+        print(f"[{now()}] websocket-client not installed")
+        return None
+    except Exception as e:
+        print(f"[{now()}] AIS error: {e}")
+        return None
 
 def fetch_hormuztracker():
     """Scrape key data from HormuzTracker."""
@@ -370,6 +448,15 @@ def refresh_data():
 
     ht = fetch_hormuztracker()
     data.update(ht)
+
+    # Override vessel count with AIS data if available (more accurate)
+    if AISSTREAM_KEY:
+        ais_count = fetch_ais_vessels()
+        if ais_count is not None:
+            data["hormuz"] = ais_count
+            print(f"[{now()}] Using AIS vessel count: {ais_count}")
+        else:
+            print(f"[{now()}] AIS unavailable, using HormuzTracker scrape")
 
     # Track brent high days
     if data.get("brent", 0) >= 120:
