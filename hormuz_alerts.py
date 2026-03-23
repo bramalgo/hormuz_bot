@@ -428,9 +428,16 @@ def handle_commands():
                 )
             elif cmd == "/strait":
                 cf_label = {"none":"None","talks":"Talks","announced":"Announced","holding":"Holding"}.get(data.get("ceasefire","none"),"?")
+                hormuz = data.get("hormuz")
+                if hormuz is not None:
+                    hormuz_str = f"<b>{hormuz}/day</b>"
+                    if hormuz == 0:
+                        hormuz_str += " ⚠ (AISstream: 0 detected — verify manually)"
+                else:
+                    hormuz_str = "N/A (AISstream not yet returned data)"
                 send(
                     f"🚢 <b>Strait of Hormuz</b>\n"
-                    f"Vessels: <b>{str(data.get('hormuz')) + '/day' if data.get('hormuz') is not None else 'N/A'}\n"
+                    f"Vessels: {hormuz_str}\n"
                     f"Carriers: {str(data.get('carriers_out'))+'/'+str(data.get('carriers_total'))+' suspended' if data.get('carriers_out') is not None else 'N/A'}\n"
                     f"P&I: {'Cancelled' if data.get('pi_withdrawn') else 'Active'}\n"
                     f"Ceasefire: {cf_label}"
