@@ -5,7 +5,7 @@ Runs 24/7, sends alerts and responds to commands.
 Usage: python3 hormuz_alerts.py
 """
 
-import os, json, time, requests, schedule, threading, asyncio
+import os, json, time, requests, schedule, threading
 import websocket
 from flask import Flask, request as freq, jsonify
 from datetime import datetime
@@ -16,16 +16,11 @@ load_dotenv()
 # ── CONFIG ──
 BOT_TOKEN   = os.getenv("TG_TOKEN",    "")
 CHAT_ID     = os.getenv("TG_CHAT_ID",  "")
-JSONBIN_ID  = os.getenv("JSONBIN_ID",  "")
-JSONBIN_KEY    = os.getenv("JSONBIN_KEY",    "")
-AISSTREAM_KEY  = os.getenv("AISSTREAM_KEY", "")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "hormuz2026")
 
 # Debug output — shows in Railway logs
 print(f"TG_TOKEN: {'SET ('+BOT_TOKEN[:8]+'...)' if BOT_TOKEN else 'NOT SET'}")
 print(f"TG_CHAT_ID: {'SET' if CHAT_ID else 'NOT SET'}")
-print(f"JSONBIN_ID: {'SET' if JSONBIN_ID else 'NOT SET'}")
-print(f"JSONBIN_KEY: {'SET' if JSONBIN_KEY else 'NOT SET'}")
 
 BASES = {
     "brent": 71.32, "wti": 67.80, "gold": 2650, "tsy": 4.19,
@@ -91,141 +86,6 @@ def send(msg):
 
 def now():
     return datetime.now().strftime("%H:%M:%S")
-
-def fetch_yahoo(symbol, range_="5d"):
-    """Fetch price from Yahoo Finance — uses regularMarketPrice for live data."""
-    # Try v10/quoteSummary first — gives live market price not delayed close
-    try:
-        url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=price"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}, timeout=10)
-        d = r.json()
-        result = d["quoteSummary"]["result"][0]["price"]
-        price = result["regularMarketPrice"]["raw"]
-        mkt_state = result.get("marketState","?")
-        if price and price > 0:
-            print(f"[{now()}] {symbol}: ${price:.2f} (state:{mkt_state}) via v10")
-            return price
-    except Exception as e:
-        print(f"[{now()}] {symbol} v10 failed: {e}")
-    # Fallback to chart API — use meta.regularMarketPrice
-    for interval, rng in [("5m","1d"), ("1h","5d"), ("1d","5d")]:
-        try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={rng}"
-            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-            d = r.json()
-            meta = d["chart"]["result"][0].get("meta", {})
-            if meta.get("regularMarketPrice"):
-                print(f"[{now()}] {symbol}: ${meta['regularMarketPrice']:.2f} via chart meta")
-                return meta["regularMarketPrice"]
-            closes = d["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-            closes = [c for c in closes if c is not None]
-            if closes:
-                print(f"[{now()}] {symbol}: ${closes[-1]:.2f} via chart close (stale)")
-                return closes[-1]
-        except:
-            continue
-    return None
-
-def fetch_coingecko_btc():
-    """Fetch BTC price from CoinGecko with fallback to Yahoo."""
-    # Try CoinGecko
-    for attempt in range(2):
-        try:
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-            d = r.json()
-            price = d["bitcoin"]["usd"]
-            print(f"[{now()}] CoinGecko BTC: ${price:,.0f}")
-            return price
-        except Exception as e:
-            print(f"[{now()}] CoinGecko attempt {attempt+1} failed: {e}")
-            time.sleep(2)
-    # Fallback to Yahoo
-    try:
-        price = fetch_yahoo("BTC-USD")
-        if price:
-            print(f"[{now()}] BTC via Yahoo fallback: ${price:,.0f}")
-            return price
-    except:
-        pass
-    return None
-
-
-# ── AIS VESSEL TRACKING ──
-# Hormuz Strait bounding box
-HORMUZ_BOX = {
-    "min_lat": 26.165299, "max_lat": 26.924519,
-    "min_lon": 56.181335, "max_lon": 56.634521
-}
-
-def fetch_ais_vessels():
-    """Count vessels in Hormuz Strait using AISstream.io WebSocket API."""
-    if not AISSTREAM_KEY:
-        return None
-    try:
-        import websocket
-        vessels_seen = set()
-        result = {"count": None, "done": False}
-
-        def on_message(ws, message):
-            try:
-                msg = json.loads(message)
-                mmsi = msg.get("MetaData", {}).get("MMSI")
-                if mmsi:
-                    vessels_seen.add(mmsi)
-            except:
-                pass
-
-        def on_open(ws):
-            subscribe = {
-                "APIKey": AISSTREAM_KEY,
-                "BoundingBoxes": [[
-                    [HORMUZ_BOX["min_lat"], HORMUZ_BOX["min_lon"]],
-                    [HORMUZ_BOX["max_lat"], HORMUZ_BOX["max_lon"]]
-                ]],
-                "FilterMessageTypes": ["PositionReport"]
-            }
-            ws.send(json.dumps(subscribe))
-            # Collect for 30 seconds then close
-            def close_after():
-                time.sleep(60)
-                result["count"] = len(vessels_seen)
-                result["done"] = True
-                ws.close()
-            t = threading.Thread(target=close_after, daemon=True)
-            t.start()
-
-        def on_error(ws, error):
-            print(f"[{now()}] AIS WebSocket error: {error}")
-            result["done"] = True
-
-        def on_close(ws, *args):
-            result["done"] = True
-
-        ws = websocket.WebSocketApp(
-            "wss://stream.aisstream.io/v0/stream",
-            on_open=on_open,
-            on_message=on_message,
-            on_error=on_error,
-            on_close=on_close
-        )
-        # Run in thread with 45s timeout
-        t = threading.Thread(target=ws.run_forever, daemon=True)
-        t.start()
-        timeout = 75
-        start = time.time()
-        while not result["done"] and time.time()-start < timeout:
-            time.sleep(1)
-        count = result.get("count")
-        if count is not None:
-            print(f"[{now()}] AIS vessels in Hormuz: {count} (30s window)")
-        return count
-    except ImportError:
-        print(f"[{now()}] websocket-client not installed")
-        return None
-    except Exception as e:
-        print(f"[{now()}] AIS error: {e}")
-        return None
 
 def fetch_hormuztracker():
     """Scrape key data from HormuzTracker."""
@@ -336,53 +196,8 @@ def fetch_hormuztracker():
         result["conflict_day_calc"] = int((time.time() - conflict_start) / 86400)
     return result
 
-def push_prices_to_jsonbin():
-    """Push latest prices to JSONBin so dashboard can read them."""
-    if not JSONBIN_ID or not JSONBIN_KEY:
-        return
-    try:
-        payload = {
-            "ts": int(time.time()),
-            "brent":  round(data.get("brent",  0), 2),
-            "wti":    round(data.get("wti",    0), 2),
-            "gold":   round(data.get("gold",   0), 2),
-            "spx":    round(data.get("spx",    0), 2),
-            "tsy":    round(data.get("tsy",    0), 3),
-            "btc":    round(data.get("btc",    0), 0),
-            "dxy":    round(data.get("dxy",    0), 2),
-            "kospi":  round(data.get("kospi",  0), 0),
-            "nikkei": round(data.get("nikkei", 0), 0),
-            "bdi":    round(data.get("bdi",    0), 0),
-            "ttf":    round(data.get("ttf",    0), 2),
-            "vlcc":   round(data.get("vlcc",   285000), 0),
-            "hormuz": data.get("hormuz"),  # None if scrape failed
-            "carriersOut":   data.get("carriers_out"),
-            "carriersTotal": data.get("carriers_total"),
-            "piWithdrawn":   data.get("pi_withdrawn", True),
-            "ceasefire":     data.get("ceasefire", "none"),
-            "conflictDay":   data.get("conflict_day") or data.get("conflict_day_calc", 22),
-            "ieaMb":         data.get("ieaMb", 400),
-        }
-        r = requests.put(
-            f"https://api.jsonbin.io/v3/b/{JSONBIN_ID}",
-            json=payload,
-            headers={
-                "Content-Type": "application/json",
-                "X-Master-Key": JSONBIN_KEY,
-                "X-Bin-Versioning": "false"
-            },
-            timeout=10
-        )
-        if r.status_code == 200:
-            print(f"[{now()}] ✓ Prices pushed to JSONBin")
-        else:
-            print(f"[{now()}] JSONBin error: {r.status_code} {r.text[:100]}")
-    except Exception as e:
-        print(f"[{now()}] JSONBin push error: {e}")
-
-
 def calc_phase():
-    b = data.get("brent", 92)
+    b = data.get("brent") or 92
     h = data.get("hormuz", 0)
     cf = data.get("ceasefire", "none")
     pi = data.get("pi_withdrawn", True)
@@ -394,6 +209,74 @@ def calc_phase():
     if cf == "talks": return 1
     return 0
 
+# ── AIS VESSEL TRACKING (Hormuz Strait) ──
+AISSTREAM_KEY = os.getenv("AISSTREAM_KEY", "")
+
+HORMUZ_BOX = {
+    "min_lat": 26.165299, "max_lat": 26.924519,
+    "min_lon": 56.181335, "max_lon": 56.634521
+}
+
+def fetch_ais_vessels():
+    """Count vessels in Hormuz Strait using AISstream.io WebSocket."""
+    if not AISSTREAM_KEY:
+        return None
+    try:
+        vessels_seen = set()
+        result = {"count": None, "done": False}
+
+        def on_message(ws, message):
+            try:
+                msg = json.loads(message)
+                mmsi = msg.get("MetaData", {}).get("MMSI")
+                if mmsi:
+                    vessels_seen.add(mmsi)
+            except:
+                pass
+
+        def on_open(ws):
+            subscribe = {
+                "APIKey": AISSTREAM_KEY,
+                "BoundingBoxes": [[
+                    [HORMUZ_BOX["min_lat"], HORMUZ_BOX["min_lon"]],
+                    [HORMUZ_BOX["max_lat"], HORMUZ_BOX["max_lon"]]
+                ]],
+                "FilterMessageTypes": ["PositionReport"]
+            }
+            ws.send(json.dumps(subscribe))
+            def close_after():
+                time.sleep(60)
+                result["count"] = len(vessels_seen)
+                result["done"] = True
+                ws.close()
+            threading.Thread(target=close_after, daemon=True).start()
+
+        def on_error(ws, error):
+            print(f"[{now()}] AIS error: {error}")
+            result["done"] = True
+
+        def on_close(ws, *args):
+            result["done"] = True
+
+        ws_app = websocket.WebSocketApp(
+            "wss://stream.aisstream.io/v0/stream",
+            on_open=on_open, on_message=on_message,
+            on_error=on_error, on_close=on_close
+        )
+        t = threading.Thread(target=ws_app.run_forever, daemon=True)
+        t.start()
+        start = time.time()
+        while not result["done"] and time.time()-start < 75:
+            time.sleep(1)
+        count = result.get("count")
+        if count is not None:
+            print(f"[{now()}] AIS vessels in Hormuz: {count} (60s window)")
+        return count
+    except Exception as e:
+        print(f"[{now()}] AIS error: {e}")
+        return None
+
+
 def refresh_data():
     """Fetch HormuzTracker + AIS data only. Market prices come via TradingView webhooks."""
     print(f"[{now()}] Refreshing HormuzTracker + AIS...")
@@ -402,18 +285,17 @@ def refresh_data():
     ht = fetch_hormuztracker()
     data.update(ht)
 
+    # Track brent high days (uses last TV webhook price)
+    if (data.get("brent") or 0) >= 120:
+        state["brent_high_days"] = state.get("brent_high_days", 0) + 1
+    else:
+        state["brent_high_days"] = 0
+
     # AIS vessel count
     if AISSTREAM_KEY:
         ais_count = fetch_ais_vessels()
         if ais_count is not None:
             data["hormuz"] = ais_count
-            print(f"[{now()}] AIS vessel count: {ais_count}")
-
-    # Track brent high days (uses last TV webhook price)
-    if data.get("brent", 0) >= 120:
-        state["brent_high_days"] = state.get("brent_high_days", 0) + 1
-    else:
-        state["brent_high_days"] = 0
 
     # Always calculate conflict day
     data["conflict_day"] = int((time.time() - datetime(2026,2,28).timestamp()) / 86400)
@@ -449,7 +331,7 @@ def check_alerts():
     state["ceasefire"] = cf
 
     # Brent $120+
-    b120 = data.get("brent", 0) >= 120
+    b120 = (data.get("brent") or 0) >= 120
     if b120 and not state["brent_120"]:
         send(
             f"🔴 <b>BRENT ABOVE $120 — BEAR CASE RISK</b>\n"
@@ -615,7 +497,6 @@ def handle_commands():
     except Exception as e:
         print(f"[{now()}] Command poll error: {e}")
 
-
 # ── TRADINGVIEW WEBSOCKET FEED ──
 TV_SYMBOLS = {
     "UKOIL":   "brent",
@@ -631,25 +512,6 @@ TV_SYMBOLS = {
     "TTF1!":   "ttf",
     "BDI":     "bdi",
 }
-
-TV_BOUNDS = {
-    "brent":(50,200),"wti":(40,190),"gold":(1000,8000),
-    "spx":(2000,10000),"tsy":(0.1,15),"btc":(1000,500000),
-    "dxy":(70,140),"kospi":(1000,8000),"nikkei":(15000,60000),
-    "ttf":(5,500),"bdi":(100,20000)
-}
-
-def tv_generate_session():
-    import random, string
-    return "qs_" + "".join(random.choices(string.ascii_lowercase, k=12))
-
-def tv_format_msg(func, args):
-    msg = json.dumps({"m": func, "p": args}, separators=(",", ":"))
-    return f"~m~{len(msg)}~m~{msg}"
-
-tv_session = tv_generate_session()
-tv_ws = None
-tv_last_price_time = {}
 
 def tv_on_price(key, price):
     """Called when TradingView pushes a new price."""
@@ -725,7 +587,6 @@ def start_tv_feed():
         print(f"[{now()}] TradingView feed starting...")
     except Exception as e:
         print(f"[{now()}] TradingView feed error: {e}")
-
 
 # ── FLASK WEBHOOK SERVER ──
 app = Flask(__name__)
@@ -896,7 +757,7 @@ def main():
     # Set baseline state so we don't fire spurious alerts on startup
     state["phase"] = calc_phase()
     state["ceasefire"] = data.get("ceasefire", "none")
-    state["brent_120"] = data.get("brent", 0) >= 120
+    state["brent_120"] = (data.get("brent") or 0) >= 120
     state["pi_withdrawn"] = data.get("pi_withdrawn", True)
     state["hormuz_40"] = data.get("hormuz", 0) >= 40
 
