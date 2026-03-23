@@ -84,15 +84,31 @@ def now():
     return datetime.now().strftime("%H:%M:%S")
 
 def fetch_yahoo(symbol, range_="5d"):
-    """Fetch latest price from Yahoo Finance."""
+    """Fetch latest price from Yahoo Finance — tries 1m intraday first for live price."""
+    for interval, rng in [("1m","1d"), ("5m","1d"), ("1h","5d"), ("1d","5d")]:
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={rng}"
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            d = r.json()
+            closes = d["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+            closes = [c for c in closes if c is not None]
+            if closes:
+                return closes[-1]
+        except:
+            continue
+    return None
+
+def fetch_coingecko_btc():
+    """Fetch BTC price from CoinGecko — real-time, reliable."""
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range={range_}"
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         d = r.json()
-        closes = d["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-        closes = [c for c in closes if c is not None]
-        return closes[-1] if closes else None
-    except:
+        price = d["bitcoin"]["usd"]
+        print(f"[{now()}] CoinGecko BTC: ${price:,.0f}")
+        return price
+    except Exception as e:
+        print(f"[{now()}] CoinGecko BTC error: {e}")
         return None
 
 def fetch_hormuztracker():
@@ -244,13 +260,29 @@ def refresh_data():
     print(f"[{now()}] Fetching data...")
     symbols = {
         "brent": "BZ=F", "wti": "CL=F", "gold": "GC=F",
-        "spx": "%5EGSPC", "tsy": "%5ETNX", "btc": "BTC-USD",
+        "spx": "%5EGSPC", "tsy": "%5ETNX",
         "dxy": "DX-Y.NYB", "kospi": "%5EKS11", "nikkei": "%5EN225", "bdi": "%5EBDI",
         "ttf": "TTF=F"
     }
+    # Sanity bounds — reject values outside realistic ranges
+    BOUNDS = {
+        "brent":(50,200), "wti":(40,190), "gold":(1000,8000),
+        "spx":(2000,10000), "tsy":(0.1,15), "btc":(1000,500000),
+        "dxy":(70,140), "kospi":(1000,4000), "nikkei":(15000,55000),
+        "bdi":(100,10000), "ttf":(5,500)
+    }
     for key, sym in symbols.items():
         v = fetch_yahoo(sym)
-        if v: data[key] = v
+        if v:
+            lo, hi = BOUNDS.get(key, (0, float('inf')))
+            if lo <= v <= hi:
+                data[key] = v
+            else:
+                print(f"[{now()}] {key} value {v} out of bounds ({lo}-{hi}), skipping")
+
+    # BTC from CoinGecko — more reliable than Yahoo for crypto
+    btc = fetch_coingecko_btc()
+    if btc: data["btc"] = btc
 
     ht = fetch_hormuztracker()
     data.update(ht)
@@ -493,7 +525,7 @@ def main():
     )
 
     # Schedule
-    schedule.every(15).minutes.do(lambda: (refresh_data(), push_prices_to_jsonbin(), check_alerts(), state.update({"last_fetch_time": now()})))
+    schedule.every(5).minutes.do(lambda: (refresh_data(), push_prices_to_jsonbin(), check_alerts(), state.update({"last_fetch_time": now()})))
     schedule.every().day.at("08:00").do(send_summary)
 
     print(f"[{now()}] Bot running. Ctrl+C to stop.")
