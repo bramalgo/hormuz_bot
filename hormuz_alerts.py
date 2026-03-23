@@ -54,7 +54,7 @@ data = {
     # Seeded defaults — updated on each fetch
     "brent": 112.19, "wti": 98.32, "gold": 4574.90,
     "spx": 6506, "tsy": 4.39, "btc": 68900,
-    "dxy": 99.5, "kospi": 2280, "nikkei": 35800, "bdi": 890,
+    "dxy": 99.5, "kospi": 5452, "nikkei": 35800, "bdi": 890,
     "ttf": 60.20, "vlcc": 285000,
     "hormuz": 5, "carriers_out": 9, "carriers_total": 9,
     "pi_withdrawn": True, "ceasefire": "none",
@@ -307,7 +307,7 @@ def refresh_data():
     BOUNDS = {
         "brent":(50,200), "wti":(40,190), "gold":(1000,8000),
         "spx":(2000,10000), "tsy":(0.1,15), "btc":(1000,500000),
-        "dxy":(70,140), "kospi":(1000,4000), "nikkei":(15000,55000),
+        "dxy":(70,140), "kospi":(1000,8000), "nikkei":(15000,55000),
         "bdi":(100,10000), "ttf":(5,500)
     }
     for key, sym in symbols.items():
@@ -316,6 +316,8 @@ def refresh_data():
             lo, hi = BOUNDS.get(key, (0, float('inf')))
             if lo <= v <= hi:
                 data[key] = v
+                if key in ("kospi","nikkei","spx"):
+                    print(f"[{now()}] {key}: {v:.0f}")
             else:
                 print(f"[{now()}] {key} value {v} out of bounds ({lo}-{hi}), skipping")
 
