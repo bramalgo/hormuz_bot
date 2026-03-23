@@ -508,6 +508,14 @@ def tv_format_msg(func, args):
     return f"~m~{len(msg)}~m~{msg}"
 
 
+TV_BOUNDS = {
+    "brent":(50,200), "wti":(40,190), "gold":(1000,8000),
+    "spx":(2000,10000), "tsy":(0.1,15), "btc":(1000,500000),
+    "dxy":(70,140), "kospi":(1000,8000), "nikkei":(15000,60000),
+    "ttf":(5,500), "bdi":(100,20000)
+}
+tv_last_price_time = {}
+
 TV_SYMBOLS = {
     "UKOIL":   "brent",
     "USOIL":   "wti",
@@ -536,6 +544,9 @@ def tv_on_price(key, price):
 
 def tv_on_message(ws, msg):
     import re
+    # Debug: log first few chars of each message
+    if len(msg) > 5:
+        print(f"[TV] raw: {msg[:120]}")
     patterns = re.findall(r"~m~\d+~m~(.+?)(?=~m~|$)", msg)
     for p in patterns:
         try:
