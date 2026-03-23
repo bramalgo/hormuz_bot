@@ -146,8 +146,8 @@ def fetch_coingecko_btc():
 # ── AIS VESSEL TRACKING ──
 # Hormuz Strait bounding box
 HORMUZ_BOX = {
-    "min_lat": 25.5, "max_lat": 27.5,
-    "min_lon": 56.0, "max_lon": 57.5
+    "min_lat": 26.024702, "max_lat": 27.211892,
+    "min_lon": 56.075592, "max_lon": 56.749878
 }
 
 def fetch_ais_vessels():
@@ -180,7 +180,7 @@ def fetch_ais_vessels():
             ws.send(json.dumps(subscribe))
             # Collect for 30 seconds then close
             def close_after():
-                time.sleep(30)
+                time.sleep(60)
                 result["count"] = len(vessels_seen)
                 result["done"] = True
                 ws.close()
@@ -204,7 +204,7 @@ def fetch_ais_vessels():
         # Run in thread with 45s timeout
         t = threading.Thread(target=ws.run_forever, daemon=True)
         t.start()
-        timeout = 45
+        timeout = 75
         start = time.time()
         while not result["done"] and time.time()-start < timeout:
             time.sleep(1)
