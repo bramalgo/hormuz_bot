@@ -12,13 +12,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── CONFIG ──
-BOT_TOKEN  = os.getenv("TG_TOKEN",  "")
-CHAT_ID    = os.getenv("TG_CHAT_ID", "")
+BOT_TOKEN   = os.getenv("TG_TOKEN",    "")
+CHAT_ID     = os.getenv("TG_CHAT_ID",  "")
+JSONBIN_ID  = os.getenv("JSONBIN_ID",  "")
+JSONBIN_KEY = os.getenv("JSONBIN_KEY", "")
 
 # Debug output — shows in Railway logs
 print(f"TG_TOKEN: {'SET ('+BOT_TOKEN[:8]+'...)' if BOT_TOKEN else 'NOT SET'}")
 print(f"TG_CHAT_ID: {'SET' if CHAT_ID else 'NOT SET'}")
-print(f"All env vars: {[k for k in os.environ.keys() if 'TG' in k.upper()]}")
+print(f"JSONBIN_ID: {'SET' if JSONBIN_ID else 'NOT SET'}")
+print(f"JSONBIN_KEY: {'SET' if JSONBIN_KEY else 'NOT SET'}")
 
 BASES = {
     "brent": 71.32, "wti": 67.80, "gold": 2650, "tsy": 4.19,
