@@ -56,7 +56,7 @@ data = {
     "spx": 6506, "tsy": 4.39, "btc": 68900,
     "dxy": 99.5, "kospi": 5452, "nikkei": 35800, "bdi": 2056,
     "ttf": 60.20, "vlcc": 285000,
-    "hormuz": 5, "carriers_out": 9, "carriers_total": 9,
+    "hormuz": None, "carriers_out": None, "carriers_total": None,
     "pi_withdrawn": True, "ceasefire": "none",
     "conflict_day": 22, "conflict_day_calc": 22, "ieaMb": 400
 }
@@ -150,24 +150,24 @@ def fetch_hormuztracker():
         html = r.text
         import re
 
-        # ── Vessels — try tilde format first (~5) as shown on site ──
-        vm = (re.search(r'~\s*(\d+)\s*(?:ships?|vessels?)', html, re.I)
-           or re.search(r'~\s*(\d+)\s*\n', html)
-           or re.search(r'(\d+)\s*vessels?\s*(?:detected\s*)?today', html, re.I)
-           or re.search(r'today[^\d]{0,20}(\d+)\s*vessels?', html, re.I)
-           or re.search(r'(\d+)\s*ships?\s*(?:detected|transiting|passed)', html, re.I))
+        # ── Vessels — strict matching only, no fallback guessing ──
+        vm = (re.search(r'~\s*(\d+)\s*(?:ships?|vessels?|transits?)', html, re.I)
+           or re.search(r'(\d{1,3})\s*vessels?\s*(?:detected|transiting|logged)\s*today', html, re.I)
+           or re.search(r'vessels?\s*detected\s*today[^\d]{0,20}(\d+)', html, re.I))
         if vm:
             c = int(vm.group(1))
-            # Print context to help debug
-            start = max(0, vm.start()-30)
-            end = min(len(html), vm.end()+30)
-            print(f"[{now()}] Vessel match: '{html[start:end].strip()}' → {c}")
-            if 0 < c < 500:
+            start = max(0, vm.start()-40)
+            end = min(len(html), vm.end()+40)
+            ctx = html[start:end].strip()
+            print(f"[{now()}] Vessel match: '{ctx}' → {c}")
+            if 2 <= c <= 150:
                 result["hormuz"] = c
             else:
-                print(f"[{now()}] Hormuz vessels out of range: {c}")
+                print(f"[{now()}] Vessel count {c} rejected — showing N/A")
+                result["hormuz"] = None
         else:
-            print(f"[{now()}] Hormuz vessels: no match found")
+            print(f"[{now()}] Hormuz vessels: no confident match — showing N/A")
+            result["hormuz"] = None
 
         # ── TTF gas ──
         tm = (re.search(r'TTF[^\d]{0,20}([\d.]+)', html, re.I)
@@ -179,10 +179,21 @@ def fetch_hormuztracker():
                 result["ttf"] = v
 
         # ── P&I ──
-        result["pi_withdrawn"] = bool(
-            re.search(r'withdrawn|cancelled|suspended', html, re.I)
-            and re.search(r'P.{0,3}I|club|marine\s*insur', html, re.I)
+        # P&I — only set if we find clear co-occurrence of P&I + withdrawal language
+        pi_withdrawn_match = (
+            re.search(r'P.{0,3}I.{0,100}(withdrawn|cancelled|suspended)', html, re.I)
+            or re.search(r'(withdrawn|cancelled|suspended).{0,100}P.{0,3}I', html, re.I)
         )
+        pi_active_match = re.search(r'P.{0,3}I.{0,100}(reinstated|active|restored)', html, re.I)
+        if pi_withdrawn_match and not pi_active_match:
+            result["pi_withdrawn"] = True
+            print(f"[{now()}] P&I: Withdrawn")
+        elif pi_active_match:
+            result["pi_withdrawn"] = False
+            print(f"[{now()}] P&I: Active/Reinstated")
+        else:
+            result["pi_withdrawn"] = None
+            print(f"[{now()}] P&I: no confident match — N/A")
 
         # ── Carriers — look for small total (9 major lines), reject large numbers ──
         cm = (re.search(r'(\d)\s*/\s*(9)\s*(?:major\s*)?(?:shipping\s*)?lines?\s*(?:suspended|halted|paused|stopped)', html, re.I)
@@ -199,7 +210,9 @@ def fetch_hormuztracker():
             else:
                 print(f"[{now()}] Carriers: rejected {out}/{total} (total too large, keeping seeded 9/9)")
         else:
-            print(f"[{now()}] Carriers: no match, keeping seeded 9/9")
+            print(f"[{now()}] Carriers: no confident match — showing N/A")
+            result["carriers_out"] = None
+            result["carriers_total"] = None
 
         # ── Conflict day — try scraping, fallback to calculation ──
         dm = (re.search(r'day\s+(\d+)\s+of\s+conflict', html, re.I)
@@ -255,9 +268,9 @@ def push_prices_to_jsonbin():
             "bdi":    round(data.get("bdi",    0), 0),
             "ttf":    round(data.get("ttf",    0), 2),
             "vlcc":   round(data.get("vlcc",   285000), 0),
-            "hormuz": data.get("hormuz", 5),
-            "carriersOut":   data.get("carriers_out",  9),
-            "carriersTotal": data.get("carriers_total", 9),
+            "hormuz": data.get("hormuz"),  # None if scrape failed
+            "carriersOut":   data.get("carriers_out"),
+            "carriersTotal": data.get("carriers_total"),
             "piWithdrawn":   data.get("pi_withdrawn", True),
             "ceasefire":     data.get("ceasefire", "none"),
             "conflictDay":   data.get("conflict_day") or data.get("conflict_day_calc", 22),
@@ -444,7 +457,7 @@ def send_summary():
         f"BTC: ${data.get('btc',0):,.0f} | SPX: {data.get('spx',0):,.0f}\n\n"
         f"🚢 <b>Strait</b>\n"
         f"Hormuz: {data.get('hormuz','?')}/day (need 40+ for Phase 1)\n"
-        f"Carriers: {data.get('carriers_out','?')}/{data.get('carriers_total','?')} suspended\n"
+        f"Carriers: {str(data.get('carriers_out'))+'/'+str(data.get('carriers_total'))+' suspended' if data.get('carriers_out') is not None else 'N/A'}\n"
         f"P&I: {'Cancelled' if data.get('pi_withdrawn') else 'Active'}\n"
         f"Ceasefire: {{'none':'None','talks':'Talks','announced':'Announced','holding':'Holding'}}.get(data.get('ceasefire','none'),'?')\n\n"
         f"🎯 <b>Target allocation</b>\n{p['alloc']}"
@@ -493,8 +506,8 @@ def handle_commands():
                 cf_label = {"none":"None","talks":"Talks","announced":"Announced","holding":"Holding"}.get(data.get("ceasefire","none"),"?")
                 send(
                     f"🚢 <b>Strait of Hormuz</b>\n"
-                    f"Vessels: <b>{data.get('hormuz','?')}/day</b>\n"
-                    f"Carriers: {data.get('carriers_out','?')}/{data.get('carriers_total','?')} suspended\n"
+                    f"Vessels: <b>{str(data.get('hormuz')) + '/day' if data.get('hormuz') is not None else 'N/A'}\n"
+                    f"Carriers: {str(data.get('carriers_out'))+'/'+str(data.get('carriers_total'))+' suspended' if data.get('carriers_out') is not None else 'N/A'}\n"
                     f"P&I: {'Cancelled' if data.get('pi_withdrawn') else 'Active'}\n"
                     f"Ceasefire: {cf_label}"
                 )
