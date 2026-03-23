@@ -6,6 +6,7 @@ Usage: python3 hormuz_alerts.py
 """
 
 import os, json, time, requests, schedule, threading, asyncio
+from flask import Flask, request as freq, jsonify
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -17,6 +18,7 @@ CHAT_ID     = os.getenv("TG_CHAT_ID",  "")
 JSONBIN_ID  = os.getenv("JSONBIN_ID",  "")
 JSONBIN_KEY    = os.getenv("JSONBIN_KEY",    "")
 AISSTREAM_KEY  = os.getenv("AISSTREAM_KEY", "")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "hormuz2026")
 
 # Debug output — shows in Railway logs
 print(f"TG_TOKEN: {'SET ('+BOT_TOKEN[:8]+'...)' if BOT_TOKEN else 'NOT SET'}")
@@ -146,8 +148,8 @@ def fetch_coingecko_btc():
 # ── AIS VESSEL TRACKING ──
 # Hormuz Strait bounding box
 HORMUZ_BOX = {
-    "min_lat": 26.024702, "max_lat": 27.211892,
-    "min_lon": 56.075592, "max_lon": 56.749878
+    "min_lat": 26.165299, "max_lat": 26.924519,
+    "min_lon": 56.181335, "max_lon": 56.634521
 }
 
 def fetch_ais_vessels():
@@ -258,20 +260,18 @@ def fetch_hormuztracker():
 
         # ── P&I ──
         # P&I — only set if we find clear co-occurrence of P&I + withdrawal language
-        pi_withdrawn_match = (
-            re.search(r'P.{0,3}I.{0,100}(withdrawn|cancelled|suspended)', html, re.I)
-            or re.search(r'(withdrawn|cancelled|suspended).{0,100}P.{0,3}I', html, re.I)
+        # P&I — default withdrawn=True (known fact since 2 Mar 2026)
+        # Only flip to False if we find very specific reinstatement language near P&I
+        pi_reinstated = bool(
+            re.search(r'P.{0,3}I.{0,50}(reinstated|cover restored|lifting)', html, re.I)
+            or re.search(r'(reinstated|cover restored).{0,50}P.{0,3}I', html, re.I)
         )
-        pi_active_match = re.search(r'P.{0,3}I.{0,100}(reinstated|active|restored)', html, re.I)
-        if pi_withdrawn_match and not pi_active_match:
-            result["pi_withdrawn"] = True
-            print(f"[{now()}] P&I: Withdrawn")
-        elif pi_active_match:
+        if pi_reinstated:
             result["pi_withdrawn"] = False
-            print(f"[{now()}] P&I: Active/Reinstated")
+            print(f"[{now()}] P&I: REINSTATED — verify manually!")
         else:
-            result["pi_withdrawn"] = None
-            print(f"[{now()}] P&I: no confident match — N/A")
+            result["pi_withdrawn"] = True
+            print(f"[{now()}] P&I: Withdrawn (confirmed/default)")
 
         # ── Carriers — look for small total (9 major lines), reject large numbers ──
         cm = (re.search(r'(\d)\s*/\s*(9)\s*(?:major\s*)?(?:shipping\s*)?lines?\s*(?:suspended|halted|paused|stopped)', html, re.I)
@@ -302,8 +302,10 @@ def fetch_hormuztracker():
                 result["conflict_day"] = d
         # Always calculate as fallback
         conflict_start = datetime(2026, 2, 28).timestamp()
-        result["conflict_day_calc"] = int((time.time() - conflict_start) / 86400)
-        print(f"[{now()}] Conflict day: scrape={result.get('conflict_day','?')} calc={result['conflict_day_calc']}")
+        calc_day = int((time.time() - conflict_start) / 86400)
+        result["conflict_day_calc"] = calc_day
+        result["conflict_day"] = calc_day  # always use calculated — scrape unreliable
+        print(f"[{now()}] Conflict day: {calc_day} (calculated from 28 Feb 2026)")
 
         # ── Ceasefire ──
         lc = html.lower()
@@ -412,35 +414,29 @@ def refresh_data():
             else:
                 print(f"[{now()}] {key} value {v} out of bounds ({lo}-{hi}), skipping")
 
-    # Brent — try multiple contracts, use highest (spot > front month)
-    brent_alts = ["BZK26=F", "BZJ26=F", "COIL.L"]
-    for sym in brent_alts:
+    # Brent note: BZ=F returns previous day close (~$4 lag vs spot)
+    # This is Yahoo's limitation for commodity futures on free tier
+    print(f"[{now()}] Brent via BZ=F: ${data.get('brent',0):.2f} (prev close)")
+
+    # Gold — use XAUUSD=X (spot) first, GLD ETF as fallback
+    for sym in ["XAUUSD=X", "GC=F"]:
         v = fetch_yahoo(sym)
-        if v and 50 < v < 200:
-            if v > data.get("brent", 0):
-                data["brent"] = v
-                print(f"[{now()}] Brent updated from {sym}: ${v:.2f}")
+        if v and 1000 < v < 8000:
+            data["gold"] = v
+            print(f"[{now()}] Gold from {sym}: ${v:.2f}")
             break
 
-    # Gold — try spot XAUUSD via alternative
-    gold_alts = ["XAUUSD=X", "GLD"]
-    for sym in gold_alts:
-        v = fetch_yahoo(sym)
-        if v:
-            # GLD ETF trades at ~1/10 of gold price
-            if sym == "GLD": v = v * 10
-            if 1000 < v < 8000 and v > data.get("gold", 0):
-                data["gold"] = v
-                print(f"[{now()}] Gold updated from {sym}: ${v:.2f}")
-            break
-
-    # BDI — try alternative symbols
-    for sym in ["^BDI", "BDI", "BDIY"]:
+    # BDI — try Yahoo symbols, then hardcode last known if all fail
+    bdi_fetched = False
+    for sym in ["^BDI", "BDI", "BDIY", "BDY"]:
         v = fetch_yahoo(sym)
         if v and 100 < v < 20000:
             data["bdi"] = v
             print(f"[{now()}] BDI from {sym}: {v:.0f}")
+            bdi_fetched = True
             break
+    if not bdi_fetched:
+        print(f"[{now()}] BDI: all fetches failed, keeping last known: {data.get('bdi','?')}")
 
     # BTC from CoinGecko — more reliable than Yahoo for crypto
     btc = fetch_coingecko_btc()
@@ -662,6 +658,96 @@ def handle_commands():
     except Exception as e:
         print(f"[{now()}] Command poll error: {e}")
 
+
+# ── FLASK WEBHOOK SERVER ──
+app = Flask(__name__)
+
+# Symbol map from TradingView ticker → our data key
+TV_SYMBOL_MAP = {
+    "UKOIL":   "brent",   # Brent crude
+    "USOIL":   "wti",     # WTI crude
+    "GOLD":    "gold",    # Gold spot
+    "SPX":     "spx",     # S&P 500
+    "US10Y":   "tsy",     # US 10yr yield
+    "BTCUSD":  "btc",     # Bitcoin
+    "DXY":     "dxy",     # USD index
+    "KOSPI":   "kospi",   # KOSPI
+    "NI225":   "nikkei",  # Nikkei 225
+    "TTF1!":   "ttf",     # EU TTF Gas front month
+    "BDI":     "bdi",     # Baltic Dry Index
+}
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        # Verify secret
+        secret = freq.args.get('secret') or (freq.json or {}).get('secret','')
+        if secret != WEBHOOK_SECRET:
+            return jsonify({"error":"unauthorized"}), 401
+
+        body = freq.json
+        if not body:
+            return jsonify({"error":"no body"}), 400
+
+        symbol = body.get('symbol','').upper()
+        price  = body.get('price')
+        key    = body.get('key')  # can override symbol map
+
+        if price is None:
+            return jsonify({"error":"no price"}), 400
+
+        price = float(price)
+
+        # Resolve key from symbol or direct key
+        if not key:
+            # Try exact match first, then partial
+            key = TV_SYMBOL_MAP.get(symbol)
+            if not key:
+                for tv_sym, data_key in TV_SYMBOL_MAP.items():
+                    if tv_sym in symbol or symbol in tv_sym:
+                        key = data_key
+                        break
+
+        if not key:
+            return jsonify({"error":f"unknown symbol {symbol}"}), 400
+
+        # Sanity bounds
+        BOUNDS = {
+            "brent":(50,200),"wti":(40,190),"gold":(1000,8000),
+            "spx":(2000,10000),"tsy":(0.1,15),"btc":(1000,500000),
+            "dxy":(70,140),"kospi":(1000,8000),"nikkei":(15000,60000)
+        }
+        lo,hi = BOUNDS.get(key,(0,float('inf')))
+        if not (lo <= price <= hi):
+            return jsonify({"error":f"{key} price {price} out of bounds"}), 400
+
+        data[key] = price
+        print(f"[{now()}] TradingView webhook: {symbol} → {key} = {price}")
+
+        # Push to JSONBin immediately
+        push_prices_to_jsonbin()
+        check_alerts()
+
+        return jsonify({"ok":True,"key":key,"price":price})
+    except Exception as e:
+        print(f"[{now()}] Webhook error: {e}")
+        return jsonify({"error":str(e)}), 500
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({
+        "status":"ok",
+        "conflict_day": data.get("conflict_day",23),
+        "brent": data.get("brent"),
+        "btc": data.get("btc"),
+        "vessels": data.get("hormuz")
+    })
+
+def run_flask():
+    port = int(os.getenv("PORT", 8080))
+    print(f"[{now()}] Flask webhook server on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
 def main():
     print("=" * 50)
     print("  Hormuz Dashboard Alert Bot")
@@ -698,6 +784,10 @@ def main():
     # Schedule
     schedule.every(5).minutes.do(lambda: (refresh_data(), push_prices_to_jsonbin(), check_alerts(), state.update({"last_fetch_time": now()})))
     schedule.every().day.at("08:00").do(send_summary)
+
+    # Start Flask webhook server in background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
 
     print(f"[{now()}] Bot running. Ctrl+C to stop.")
     while True:
